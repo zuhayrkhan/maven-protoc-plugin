@@ -10,9 +10,7 @@ import java.io.File;
 import java.util.List;
 import java.util.Set;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.base.Preconditions.*;
 import static com.google.common.collect.Lists.newLinkedList;
 import static com.google.common.collect.Sets.newHashSet;
 
@@ -31,19 +29,24 @@ final class Protoc {
     private final ImmutableSet<File> protofiles;
     private final File javaOutputDirectory;
     private final CommandLineUtils.StringStreamConsumer error, output;
+    private String protocPluginNameAndPath;
+    private final ImmutableSet<String> additionalOutputPaths;
 
     /**
      * Constructs a new instance. This should only be used by the {@link Builder}.
      *
      * @param executable          The path to the {@code protoc} executable.
+     * @param protocPlugin        The plugin to be specified for use with protoc
      * @param protoPath           The directories in which to search for imports.
      * @param protoFiles          The proto source files to compile.
+     * @param additionalOutputs   Any additional outputs required
      * @param javaOutputDirectory The directory into which the java source files
-     *                            will be generated.
      */
-    private Protoc(String executable, ImmutableSet<File> protoPath,
-                   ImmutableSet<File> protoFiles, File javaOutputDirectory) {
+    private Protoc(String executable, String protocPlugin, ImmutableSet<File> protoPath,
+                   ImmutableSet<File> protoFiles, ImmutableSet<String> additionalOutputs, File javaOutputDirectory) {
+        this.additionalOutputPaths = additionalOutputs;
         this.executable = checkNotNull(executable, "executable");
+        this.protocPluginNameAndPath = protocPlugin;
         this.protoPathElements = checkNotNull(protoPath, "protoPath");
         this.protofiles = checkNotNull(protoFiles, "protoFiles");
         this.javaOutputDirectory = checkNotNull(javaOutputDirectory, "javaOutputDirectory");
@@ -74,10 +77,32 @@ final class Protoc {
     ImmutableList<String> buildProtocCommand() {
         final List<String> command = newLinkedList();
         // add the executable
+
+        // add --plugin if specified
+        if (protocPluginNameAndPath != null) {
+            command.add("--plugin=" + protocPluginNameAndPath);
+        }
+
         for (File protoPathElement : protoPathElements) {
             command.add("--proto_path=" + protoPathElement);
         }
-        command.add("--java_out=" + javaOutputDirectory);
+
+        // add output paths
+        // add additional output paths requested
+        boolean haveSpecifiedJavaOutputPath = false;
+        for (String outputPath : additionalOutputPaths) {
+            command.add("--" + outputPath);
+            // detect whether we've been given a specific java_out as an additional output path
+            if (!haveSpecifiedJavaOutputPath && outputPath.startsWith("java_out")) {
+                haveSpecifiedJavaOutputPath = true;
+            }
+        }
+        // as per initial behaviour and assuming we haven't over-ridden it in additionalOutputPaths,
+        // --java_out is always provided
+        if (!haveSpecifiedJavaOutputPath) {
+            command.add("--java_out=" + javaOutputDirectory);
+        }
+
         for (File protoFile : protofiles) {
             command.add(protoFile.toString());
         }
@@ -106,21 +131,25 @@ final class Protoc {
     static final class Builder {
         private final String executable;
         private final File javaOutputDirectory;
+        private Set<String> additionalOutputs;
         private Set<File> protopathElements;
         private Set<File> protoFiles;
+        private String protocPlugin;
 
         /**
          * Constructs a new builder. The two parameters are present as they are
          * required for all {@link Protoc} instances.
          *
          * @param executable          The path to the {@code protoc} executable.
-         * @param javaOutputDirectory The directory into which the java source files
-         *                            will be generated.
-         * @throws NullPointerException     If either of the arguments are {@code null}.
-         * @throws IllegalArgumentException If the {@code javaOutputDirectory} is
-         *                                  not a directory.
+         * @param protocPlugin        Plugin to be used in generating code from the proto files
+         * @param additionalOutputs   Any additional outputs required
+         * @param javaOutputDirectory The directory into which the java source files will be generated.
+         * @throws NullPointerException If either of the arguments are {@code null}.  @throws IllegalArgumentException If the {@code javaOutputDirectory} is
+         *                              not a directory.
          */
-        public Builder(String executable, File javaOutputDirectory) {
+        public Builder(String executable, String protocPlugin, Set<String> additionalOutputs, File javaOutputDirectory) {
+            this.protocPlugin = protocPlugin;
+            this.additionalOutputs = additionalOutputs;
             this.executable = checkNotNull(executable, "executable");
             this.javaOutputDirectory = checkNotNull(javaOutputDirectory);
             checkArgument(javaOutputDirectory.isDirectory());
@@ -207,8 +236,8 @@ final class Protoc {
          */
         public Protoc build() {
             checkState(!protoFiles.isEmpty());
-            return new Protoc(executable, ImmutableSet.copyOf(protopathElements),
-                    ImmutableSet.copyOf(protoFiles), javaOutputDirectory);
+            return new Protoc(executable, protocPlugin, ImmutableSet.copyOf(protopathElements),
+                    ImmutableSet.copyOf(protoFiles), ImmutableSet.copyOf(additionalOutputs), javaOutputDirectory);
         }
     }
 }

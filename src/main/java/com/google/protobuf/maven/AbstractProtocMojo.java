@@ -22,16 +22,12 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
 import static com.google.common.base.Join.join;
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.base.Preconditions.*;
 import static com.google.common.collect.Sets.newHashSet;
 import static java.lang.String.format;
 import static java.util.Arrays.asList;
 import static java.util.Collections.list;
-import static org.codehaus.plexus.util.FileUtils.cleanDirectory;
-import static org.codehaus.plexus.util.FileUtils.copyStreamToFile;
-import static org.codehaus.plexus.util.FileUtils.getFiles;
+import static org.codehaus.plexus.util.FileUtils.*;
 
 /**
  * Abstract Mojo implementation.
@@ -76,6 +72,15 @@ abstract class AbstractProtocMojo extends AbstractMojo {
     private String protocExecutable;
 
     /**
+     * This is the definition of a protoc plugin. Will be of the form NAME=PATH and correspond to
+     * --plugin=EXECUTABLE in the protoc compiler
+     *
+     * @parameter
+     * @optional
+     */
+    private String protocPlugin;
+
+    /**
      * @parameter
      */
     private File[] additionalProtoPathElements = new File[]{};
@@ -110,6 +115,17 @@ abstract class AbstractProtocMojo extends AbstractMojo {
     private boolean hashDependentPaths;
 
     /**
+     * Allow the user to specify addition outputs - primarily for use alongside plugins.
+     * A protobuf plugin may require the user to specify an output directory for it's files.
+     * The form of these outputs will be:
+     * <p/>
+     * output=path
+     *
+     * @parameter
+     */
+    private Set<String> additionalOutputs = ImmutableSet.of();
+
+    /**
      * @parameter
      */
     private Set<String> includes = ImmutableSet.of(DEFAULT_INCLUDES);
@@ -136,10 +152,32 @@ abstract class AbstractProtocMojo extends AbstractMojo {
                     final File outputDirectory = getOutputDirectory();
                     outputDirectory.mkdirs();
 
+                    // we need to ensure that any additional output directories exist and create them if not
+                    for (String additionalOutput : additionalOutputs) {
+                        // additionalOutput will be of the form output=path
+                        String[] outputAndPath = additionalOutput.split("=");
+                        if (outputAndPath.length != 2) {
+                            throw new IllegalArgumentException("additionalOutput should be of the form 'output=path' [additionalOutput=" + additionalOutput + "]");
+                        }
+                        String outputPath = outputAndPath[1];
+                        File outputPathFile = new File(outputPath);
+                        if (outputPathFile.exists()) {
+                            // ensure it's a directory
+                            if (!outputPathFile.isDirectory()) {
+                                throw new IllegalArgumentException("additionalOutput path should be a directory [outputPathFile=" + outputPathFile + "]");
+                            }
+                        } else {
+                            boolean mkdirResult = outputPathFile.mkdir();
+                            if (!mkdirResult) {
+                                throw new IllegalStateException("Failed to create additionalOutput directory [outputPathFile=" + outputPathFile + "]");
+                            }
+                        }
+                    }
+
                     // Quick fix to fix issues with two mvn installs in a row (ie no clean)
                     cleanDirectory(outputDirectory);
 
-                    Protoc protoc = new Protoc.Builder(protocExecutable, outputDirectory)
+                    Protoc protoc = new Protoc.Builder(protocExecutable, protocPlugin, additionalOutputs, outputDirectory)
                             .addProtoPathElement(protoSourceRoot)
                             .addProtoPathElements(derivedProtoPathElements)
                             .addProtoPathElements(asList(additionalProtoPathElements))
